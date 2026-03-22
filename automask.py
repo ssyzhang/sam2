@@ -176,6 +176,7 @@
 #     )
 
 #基于npu的引入
+import cv2
 import glob
 import matplotlib.patches as patches
 import torch
@@ -290,6 +291,51 @@ def save_anns_with_labels(image, anns, save_path, borders=True):
     plt.axis('off')
     plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
     plt.close(fig) # 显式关闭 figure 释放内存
+
+def save_anns_with_cv2(image, anns, save_path):
+    """
+    使用 OpenCV 保存结果，确保像素尺寸与原图完全一致
+    """
+    if len(anns) == 0:
+        cv2.imwrite(save_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        return
+
+    # 1. 拷贝原图，避免直接修改原始数据
+    # 注意：如果 image 是 RGB，cv2 需要 BGR
+    res_img = cv2.cvtColor(image.copy(), cv2.COLOR_RGB2BGR)
+    
+    # 2. 准备一个半透明遮罩层
+    mask_overlay = res_img.copy()
+    
+    for ann in anns:
+        m = ann['segmentation'] # 这是一个布尔矩阵
+        
+        # 随机颜色 (B, G, R)
+        color = np.random.randint(0, 255, (3,)).tolist()
+        
+        # 填充遮罩颜色
+        mask_overlay[m] = color
+        
+        # 绘制边界线 (白色)
+        contours, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(res_img, contours, -1, (255, 255, 255), 1)
+
+        # 绘制 Box (黄色)
+        x, y, w, h = [int(v) for v in ann['bbox']]
+        cv2.rectangle(res_img, (x, y), (x + w, y + h), (0, 255, 255), 2)
+        
+        # 绘制分数 (predicted_iou)
+        score = ann['predicted_iou']
+        label = f"{score:.2f}"
+        # 在方框上方写字
+        cv2.putText(res_img, label, (x, y - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+    # 3. 将遮罩与原图融合 (0.5 是透明度)
+    cv2.addWeighted(mask_overlay, 0.5, res_img, 0.5, 0, res_img)
+    
+    # 4. 直接保存，像素绝对不会变
+    cv2.imwrite(save_path, res_img)
 
 # 5. 循环处理图片
 image_extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
