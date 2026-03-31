@@ -293,27 +293,20 @@ def save_anns_with_labels(image, anns, save_path, borders=True):
     plt.close(fig) # 显式关闭 figure 释放内存
 
 def save_anns_with_cv2(image, anns, save_path):
-    """
-    使用 OpenCV 保存结果，确保像素尺寸与原图完全一致
-    """
     if len(anns) == 0:
         cv2.imwrite(save_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
         return
 
-    # 1. 拷贝原图，避免直接修改原始数据
-    # 注意：如果 image 是 RGB，cv2 需要 BGR
+    # 1. 拷贝并转换颜色空间 (RGB -> BGR)
     res_img = cv2.cvtColor(image.copy(), cv2.COLOR_RGB2BGR)
     
-    # 2. 准备一个半透明遮罩层
+    # 2. 准备遮罩层
     mask_overlay = res_img.copy()
     
     for ann in anns:
-        m = ann['segmentation'] # 这是一个布尔矩阵
-        
-        # 随机颜色 (B, G, R)
+        m = ann['segmentation']
+        # 随机颜色并填充遮罩
         color = np.random.randint(0, 255, (3,)).tolist()
-        
-        # 填充遮罩颜色
         mask_overlay[m] = color
         
         # 绘制边界线 (白色)
@@ -324,18 +317,48 @@ def save_anns_with_cv2(image, anns, save_path):
         x, y, w, h = [int(v) for v in ann['bbox']]
         cv2.rectangle(res_img, (x, y), (x + w, y + h), (0, 255, 255), 2)
         
-        # 绘制分数 (predicted_iou)
+        # --- 核心修改：绘制黑底黄字 ---
         score = ann['predicted_iou']
         label = f"{score:.2f}"
-        # 在方框上方写字
-        cv2.putText(res_img, label, (x, y - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5  # 字体大小
+        thickness = 1     # 字体粗细
+        
+        # 1. 计算文本的宽度和高度，以便画出大小合适的黑框
+        (text_w, text_h), baseline = cv2.getTextSize(label, font, font_scale, thickness)
+        
+        # 2. 确定文本框的坐标 (处理越界：如果上方没位置了，就画在框内)
+        # 默认画在 Box 左上角上方
+        text_bg_y1 = y - text_h - baseline - 5 
+        text_bg_y2 = y
+        if text_bg_y1 < 0: # 越界处理
+            text_bg_y1 = y
+            text_bg_y2 = y + text_h + baseline + 5
+            text_y = y + text_h + 2
+        else:
+            text_y = y - 5
 
-    # 3. 将遮罩与原图融合 (0.5 是透明度)
-    cv2.addWeighted(mask_overlay, 0.5, res_img, 0.5, 0, res_img)
+        # 3. 画黑色背景矩形 (thickness=-1 表示实心填充)
+        cv2.rectangle(res_img, (x, text_bg_y1), (x + text_w, text_bg_y2), (0, 0, 0), -1)
+        
+        # 4. 画文字 (黄色: (0, 255, 255) / 白色: (255, 255, 255))
+        # LINE_AA 表示抗锯齿，文字会更平滑
+        cv2.putText(res_img, label, (x, text_y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+
+    # 3. 融合遮罩
+    cv2.addWeighted(mask_overlay, 0.4, res_img, 0.6, 0, res_img)
     
-    # 4. 直接保存，像素绝对不会变
+    # 4. 保存
     cv2.imwrite(save_path, res_img)
+    # 将所有的分割掩码提取出来组成一个 3D 数组 [N, H, W]
+    all_masks = np.stack([ann['segmentation'] for ann in anns])
+    # 提取其他的评分数据
+    all_scores = np.array([ann['predicted_iou'] for ann in anns])
+
+    # 压缩保存
+    np.savez_compressed(save_path, masks=all_masks, scores=all_scores)
+    print(f"已保存原始数据至: {save_path}")
 
 # 5. 循环处理图片
 image_extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
